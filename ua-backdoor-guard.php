@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.0.1
+ * Version: 3.1.0
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -13,135 +13,27 @@
 if (!defined('ABSPATH')) exit;
 
 /* =========================================================
- * 1. UA PAY BOX — PRO
+ * 1. FREEMIUS CHECKOUT / FREE-PRO BUILD
  * ======================================================= */
 
+/*
+ * Free package: false.
+ * Pro package: set to true before creating the Pro ZIP.
+ * Payment button only opens Freemius Checkout; it never activates Pro.
+ */
+if (!defined('UABG_PRO_BUILD')) {
+    define('UABG_PRO_BUILD', false);
+}
+
 if (!function_exists('ua_backdoor_guard_is_pro')) {
-
-    function ua_backdoor_guard_hub() {
-        return 'https://uaserver.pp.ua/wp-json/upb/v1/';
-    }
-
-    function ua_backdoor_guard_domain() {
-        return strtolower(
-            preg_replace(
-                '/^www\./',
-                '',
-                (string) wp_parse_url(home_url(), PHP_URL_HOST)
-            )
-        );
-    }
-
-    function ua_backdoor_guard_state($force = false) {
-
-        $c = get_option('ua_backdoor_guard_pro');
-
-        if (!is_array($c)) {
-            $c = array(
-                'state' => 'free',
-                'expires' => 0,
-                'checked' => 0
-            );
-        }
-
-        if (
-            $force ||
-            time() - (int) $c['checked'] > 6 * HOUR_IN_SECONDS
-        ) {
-
-            $url = add_query_arg(
-                array(
-                    'service' => 'ua-backdoor-guard',
-                    'domain' => ua_backdoor_guard_domain()
-                ),
-                ua_backdoor_guard_hub() . 'status'
-            );
-
-            $r = wp_remote_get($url, array(
-                'timeout' => 12,
-                'headers' => array(
-                    'Accept' => 'application/json'
-                )
-            ));
-
-            if (
-                !is_wp_error($r) &&
-                200 === (int) wp_remote_retrieve_response_code($r)
-            ) {
-
-                $j = json_decode(wp_remote_retrieve_body($r), true);
-
-                if (is_array($j) && isset($j['state'])) {
-
-                    $c = array(
-                        'state' => sanitize_key($j['state']),
-                        'expires' => isset($j['expires'])
-                            ? (int) $j['expires']
-                            : 0,
-                        'checked' => time()
-                    );
-
-                    update_option('ua_backdoor_guard_pro', $c, false);
-                }
-
-            } elseif (time() - (int) $c['checked'] > 7 * DAY_IN_SECONDS) {
-
-                $c['state'] = 'free';
-            }
-        }
-
-        return $c;
-    }
-
     function ua_backdoor_guard_is_pro() {
-
-        $c = ua_backdoor_guard_state();
-
-        return
-            in_array(
-                $c['state'],
-                array('active', 'expiring', 'unlimited'),
-                true
-            ) &&
-            (!$c['expires'] || $c['expires'] > time());
+        return (bool) UABG_PRO_BUILD;
     }
+}
 
-    function ua_backdoor_guard_activate_pro() {
-
-        $r = wp_remote_post(
-            ua_backdoor_guard_hub() . 'activate',
-            array(
-                'timeout' => 20,
-                'body' => array(
-                    'service' => 'ua-backdoor-guard',
-                    'domain' => ua_backdoor_guard_domain(),
-                    'email' => get_option('admin_email'),
-                    'site_url' => home_url()
-                )
-            )
-        );
-
-        if (is_wp_error($r)) {
-            return $r;
-        }
-
-        $j = json_decode(wp_remote_retrieve_body($r), true);
-
-        if (
-            200 !== (int) wp_remote_retrieve_response_code($r) ||
-            !is_array($j)
-        ) {
-            return new WP_Error(
-                'pay',
-                isset($j['message'])
-                    ? sanitize_text_field($j['message'])
-                    : 'Помилка сервера UA Pay Box'
-            );
-        }
-
-        ua_backdoor_guard_state(true);
-
-        return $j;
+if (!function_exists('ua_backdoor_guard_checkout_url')) {
+    function ua_backdoor_guard_checkout_url() {
+        return 'https://checkout.freemius.com/plugin/45646/plan/80469/';
     }
 }
 
@@ -253,7 +145,7 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.0.1';
+    const VERSION = '3.1.0';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
@@ -302,11 +194,6 @@ final class UA_Backdoor_Guard {
         add_action(
             'admin_post_uabg_clear',
             array(__CLASS__, 'handle_clear')
-        );
-
-        add_action(
-            'admin_post_uabg_activate_pro',
-            array(__CLASS__, 'handle_activate_pro')
         );
 
         add_action('init', array(__CLASS__, 'active_defense'), 0);
@@ -493,78 +380,6 @@ final class UA_Backdoor_Guard {
             'uabg_active_defense_log',
             array_slice($log, 0, 50)
         );
-    }
-
-    /* =====================================================
-     * PRO ACTIVATION HANDLER
-     * =================================================== */
-
-    public static function handle_activate_pro() {
-
-        if (!current_user_can('manage_options')) {
-            wp_die('Access Denied');
-        }
-
-        check_admin_referer('uabg_activate_pro');
-
-        $result = ua_backdoor_guard_activate_pro();
-
-        if (is_wp_error($result)) {
-            set_transient(
-                'uabg_notice_' . get_current_user_id(),
-                $result->get_error_message(),
-                60
-            );
-
-            wp_safe_redirect(
-                admin_url('admin.php?page=ua-backdoor-guard')
-            );
-            exit;
-        }
-
-        $payment_url = '';
-
-        foreach (array('url', 'payment_url', 'checkout_url') as $key) {
-            if (!empty($result[$key]) && is_string($result[$key])) {
-                $payment_url = esc_url_raw($result[$key]);
-                break;
-            }
-        }
-
-        ua_backdoor_guard_state(true);
-
-        if (
-            $payment_url &&
-            wp_http_validate_url($payment_url) &&
-            strpos($payment_url, 'https://') === 0
-        ) {
-            wp_redirect($payment_url);
-            exit;
-        }
-
-        if (ua_backdoor_guard_is_pro()) {
-
-            set_transient(
-                'uabg_notice_' . get_current_user_id(),
-                'PRO успішно активовано!',
-                60
-            );
-
-        } else {
-
-            $message = !empty($result['message'])
-                ? sanitize_text_field($result['message'])
-                : 'Запит передано до UA Pay Box. Статус PRO буде перевірено автоматично.';
-
-            set_transient(
-                'uabg_notice_' . get_current_user_id(),
-                $message,
-                60
-            );
-        }
-
-        wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
-        exit;
     }
 
     /* =====================================================
@@ -780,22 +595,13 @@ final class UA_Backdoor_Guard {
                         <strong><?php echo esc_html($free_scans); ?></strong>
                     </span>
 
-                    <form method="post"
-                          action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-
-                        <input type="hidden"
-                               name="action"
-                               value="uabg_activate_pro">
-
-                        <?php wp_nonce_field('uabg_activate_pro'); ?>
-
-                        <button type="submit"
-                                class="button button-primary"
-                                style="background:#b32d2e;border-color:#b32d2e;">
-                            <?php echo esc_html(self::t('pro_btn')); ?>
-                        </button>
-
-                    </form>
+                    <a href="<?php echo esc_url(ua_backdoor_guard_checkout_url()); ?>"
+                       class="button button-primary"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       style="background:#b32d2e;border-color:#b32d2e;">
+                        <?php echo esc_html(self::t('pro_btn')); ?>
+                    </a>
 
                 <?php endif; ?>
 
@@ -1207,7 +1013,7 @@ final class UA_Backdoor_Guard {
             )
         );
 
-        $limit = max(500, min(50000, (int) $settings['scan_limit']));
+        $limit = $is_pro ? PHP_INT_MAX : max(500, min(50000, (int) $settings['scan_limit']));
 
         $all = array();
 
@@ -1262,7 +1068,7 @@ final class UA_Backdoor_Guard {
         $report = array(
             'created' => current_time('mysql'),
             'files_scanned' => 0,
-            'truncated' => count($all) >= $limit,
+            'truncated' => !$is_pro && count($all) >= $limit,
             'findings' => array(),
             'admins' => self::scan_admins(),
             'cron' => self::scan_cron(),
