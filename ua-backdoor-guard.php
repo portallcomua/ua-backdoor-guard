@@ -13,16 +13,11 @@
 if (!defined('ABSPATH')) exit;
 
 /* =========================================================
- * 1. FREEMIUS CHECKOUT / FREE-PRO BUILD
+ * 1. FREE-PRO BUILD / CHECKOUT
  * ======================================================= */
 
-/*
- * Free package: false.
- * Pro package: set to true before creating the Pro ZIP.
- * Payment button only opens Freemius Checkout; it never activates Pro.
- */
 if (!defined('UABG_PRO_BUILD')) {
-    define('UABG_PRO_BUILD', false);
+    define('UABG_PRO_BUILD', true);
 }
 
 if (!function_exists('ua_backdoor_guard_is_pro')) {
