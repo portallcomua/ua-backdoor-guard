@@ -28,7 +28,7 @@ jobs:
       - name: Build WordPress plugin ZIP with correct root folder
         run: |
           set -euo pipefail
-          VERSION="$(grep -m1 -E 'Version: [0-9]+\\.[0-9]+\\.[0-9]+' ua-backdoor-guard.php | sed -E 's/.*Version: //')"
+          VERSION="$(grep -m1 -E 'Version: [0-9]+\.[0-9]+\.[0-9]+' ua-backdoor-guard.php | sed -E 's/.*Version: //')"
           TAG="v$VERSION"
           mkdir -p dist/ua-backdoor-guard
           cp ua-backdoor-guard.php README.md dist/ua-backdoor-guard/
