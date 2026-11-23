@@ -1,10 +1,9 @@
-name: Validate and package UA Backdoor Guard
+name: Validate and publish UA Backdoor Guard
 
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,20 +21,23 @@ jobs:
         run: php -l ua-backdoor-guard.php
 
   package-release:
-    if: github.event_name == 'release'
     needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build WordPress plugin ZIP with correct root folder
         run: |
+          set -euo pipefail
+          VERSION="$(grep -m1 -E 'Version: [0-9]+\\.[0-9]+\\.[0-9]+' ua-backdoor-guard.php | sed -E 's/.*Version: //')"
+          TAG="v$VERSION"
           mkdir -p dist/ua-backdoor-guard
-          cp ua-backdoor-guard.php dist/ua-backdoor-guard/
-          cp README.md dist/ua-backdoor-guard/
+          cp ua-backdoor-guard.php README.md dist/ua-backdoor-guard/
           cd dist
           zip -r ua-backdoor-guard.zip ua-backdoor-guard
-      - name: Upload ZIP to the published GitHub release
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" ua-backdoor-guard.zip --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" ua-backdoor-guard.zip --repo "$GITHUB_REPOSITORY" --title "UA Backdoor Guard $VERSION" --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/ua-backdoor-guard.zip --repo "$GITHUB_REPOSITORY" --clobber
