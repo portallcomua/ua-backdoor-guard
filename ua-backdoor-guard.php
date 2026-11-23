@@ -36,7 +36,8 @@ if (!function_exists('ua_backdoor_guard_paybox_service')) {
         if (!is_wp_error($response) && 200 === (int) wp_remote_retrieve_response_code($response)) {
             $data = json_decode(wp_remote_retrieve_body($response), true);
             if (is_array($data) && !empty($data['url'])) {
-                set_transient($cache_key, $data, 12 * HOUR_IN_SECONDS);
+                $cache_ttl = !empty($data['price']) ? 12 * HOUR_IN_SECONDS : 10 * MINUTE_IN_SECONDS;
+                set_transient($cache_key, $data, $cache_ttl);
                 return $data;
             }
         }
@@ -223,7 +224,6 @@ function uabg_check_github_update($transient) {
             return $transient;
         }
 
-        set_transient('uabg_github_release_322', $release, 6 * HOUR_IN_SECONDS);
     }
 
     $remote_version = ltrim($release->tag_name, 'vV');
@@ -252,6 +252,9 @@ function uabg_check_github_update($transient) {
     if (!$package) {
         return $transient;
     }
+
+    // Cache only after the correctly named installable ZIP is available.
+    set_transient('uabg_github_release_322', $release, 6 * HOUR_IN_SECONDS);
 
     $obj = new stdClass();
 
