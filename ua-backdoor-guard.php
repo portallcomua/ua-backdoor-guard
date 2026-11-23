@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.2.1
+ * Version: 3.2.2
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -24,13 +24,37 @@ if (!defined('UABG_PAYBOX_SERVICE')) {
     define('UABG_PAYBOX_SERVICE', 'ua-backdoor-guard');
 }
 
-/**
- * Freemius hosted checkout. The Product Secret Key stays only in UA PayBox.
- * Current Freemius product: 45646, lifetime PRO plan: 80469.
- */
+/** Fetch safe product details and localized pricing from UA PayBox. */
+if (!function_exists('ua_backdoor_guard_paybox_service')) {
+    function ua_backdoor_guard_paybox_service($force = false) {
+        $locale = get_locale();
+        $cache_key = 'uabg_paybox_service_' . md5($locale);
+        $cached = get_transient($cache_key);
+        if (!$force && is_array($cached)) return $cached;
+        $endpoint = add_query_arg(array('service' => UABG_PAYBOX_SERVICE, 'locale' => $locale), 'https://uaserver.pp.ua/wp-json/upb/v1/service');
+        $response = wp_remote_get($endpoint, array('timeout' => 12, 'redirection' => 2, 'headers' => array('Accept' => 'application/json')));
+        if (!is_wp_error($response) && 200 === (int) wp_remote_retrieve_response_code($response)) {
+            $data = json_decode(wp_remote_retrieve_body($response), true);
+            if (is_array($data) && !empty($data['url'])) {
+                set_transient($cache_key, $data, 12 * HOUR_IN_SECONDS);
+                return $data;
+            }
+        }
+        return is_array($cached) ? $cached : array();
+    }
+}
+
 if (!function_exists('ua_backdoor_guard_checkout_url')) {
     function ua_backdoor_guard_checkout_url() {
-        return 'https://checkout.freemius.com/plugin/45646/plan/80469/';
+        $service = ua_backdoor_guard_paybox_service();
+        return !empty($service['checkout_url']) ? esc_url($service['checkout_url']) : (!empty($service['url']) ? esc_url($service['url']) : '');
+    }
+}
+
+if (!function_exists('ua_backdoor_guard_pro_price')) {
+    function ua_backdoor_guard_pro_price() {
+        $service = ua_backdoor_guard_paybox_service();
+        return !empty($service['price']) ? sanitize_text_field($service['price']) : '';
     }
 }
 
@@ -169,7 +193,7 @@ function uabg_check_github_update($transient) {
         return $transient;
     }
 
-    $release = get_transient('uabg_github_release');
+    $release = get_transient('uabg_github_release_322');
 
     if (false === $release) {
 
@@ -199,7 +223,7 @@ function uabg_check_github_update($transient) {
             return $transient;
         }
 
-        set_transient('uabg_github_release', $release, 6 * HOUR_IN_SECONDS);
+        set_transient('uabg_github_release_322', $release, 6 * HOUR_IN_SECONDS);
     }
 
     $remote_version = ltrim($release->tag_name, 'vV');
@@ -215,17 +239,14 @@ function uabg_check_github_update($transient) {
         foreach ($release->assets as $asset) {
 
             if (
-                !empty($asset->browser_download_url) &&
-                preg_match('/\.zip($|\?)/i', $asset->browser_download_url)
+                !empty($asset->name) &&
+                'ua-backdoor-guard.zip' === $asset->name &&
+                !empty($asset->browser_download_url)
             ) {
                 $package = $asset->browser_download_url;
                 break;
             }
         }
-    }
-
-    if (!$package && !empty($release->zipball_url)) {
-        $package = $release->zipball_url;
     }
 
     if (!$package) {
@@ -252,7 +273,7 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.2.1';
+    const VERSION = '3.2.2';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
@@ -502,6 +523,7 @@ final class UA_Backdoor_Guard {
         }
 
         $is_pro = ua_backdoor_guard_is_pro();
+        $pro_price = ua_backdoor_guard_pro_price();
 
         $free_scans = (int) get_option(self::OPTION_FREE_SCANS, 5);
 
@@ -694,7 +716,7 @@ final class UA_Backdoor_Guard {
                 <?php if ($is_pro): ?>
 
                     <strong style="color:#067647;font-size:17px;">
-                        ✓ <?php echo esc_html(self::t('pro_active')); ?> — довічний безлімітний доступ
+                        ✓ <?php echo esc_html(self::t('pro_active')); ?> — <?php echo strpos(get_locale(), 'uk') === 0 ? 'довічний безлімітний доступ' : 'Lifetime unlimited access'; ?>
                     </strong>
 
                 <?php else: ?>
@@ -734,7 +756,7 @@ final class UA_Backdoor_Guard {
                                target="_blank"
                                rel="noopener noreferrer"
                                style="background:#b32d2e;border-color:#b32d2e;margin:0 0 14px;">
-                                <?php echo esc_html(self::t('pro_btn')); ?>
+                                <?php echo esc_html(self::t('pro_btn')); ?><?php echo $pro_price ? ' — ' . esc_html($pro_price) : ''; ?>
                             </a>
 
                         <?php endif; ?>
