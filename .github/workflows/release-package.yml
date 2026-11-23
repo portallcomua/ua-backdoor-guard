@@ -1,0 +1,41 @@
+name: Validate and package UA Backdoor Guard
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+      - name: PHP syntax check
+        run: php -l ua-backdoor-guard.php
+
+  package-release:
+    if: github.event_name == 'release'
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build WordPress plugin ZIP with correct root folder
+        run: |
+          mkdir -p dist/ua-backdoor-guard
+          cp ua-backdoor-guard.php dist/ua-backdoor-guard/
+          cp README.md dist/ua-backdoor-guard/
+          cd dist
+          zip -r ua-backdoor-guard.zip ua-backdoor-guard
+      - name: Upload ZIP to the published GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/ua-backdoor-guard.zip --repo "$GITHUB_REPOSITORY" --clobber
