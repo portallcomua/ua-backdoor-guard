@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.1.0
+ * Version: 3.2.0
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -13,22 +13,134 @@
 if (!defined('ABSPATH')) exit;
 
 /* =========================================================
- * 1. FREE-PRO BUILD / CHECKOUT
+ * 1. UA PAYBOX + FREEMIUS PRO LICENSING
  * ======================================================= */
 
-if (!defined('UABG_PRO_BUILD')) {
-    define('UABG_PRO_BUILD', true);
+/**
+ * UA PayBox service slug. It must match the "Slug плагіна" field
+ * in UA PayBox → Послуги → UA Backdoor Guard.
+ */
+if (!defined('UABG_PAYBOX_SERVICE')) {
+    define('UABG_PAYBOX_SERVICE', 'ua-backdoor-guard');
 }
 
-if (!function_exists('ua_backdoor_guard_is_pro')) {
-    function ua_backdoor_guard_is_pro() {
-        return (bool) UABG_PRO_BUILD;
-    }
-}
-
+/**
+ * Freemius hosted checkout. The Product Secret Key stays only in UA PayBox.
+ * Current Freemius product: 45646, lifetime PRO plan: 80469.
+ */
 if (!function_exists('ua_backdoor_guard_checkout_url')) {
     function ua_backdoor_guard_checkout_url() {
         return 'https://checkout.freemius.com/plugin/45646/plan/80469/';
+    }
+}
+
+/** Central UA PayBox license endpoint. */
+if (!function_exists('ua_backdoor_guard_paybox_license_url')) {
+    function ua_backdoor_guard_paybox_license_url() {
+        return 'https://uaserver.pp.ua/wp-json/upb/v1/license/status';
+    }
+}
+
+/**
+ * Validate the Freemius license through UA PayBox.
+ * The customer license key is sent over HTTPS; Product Secret Key is never
+ * stored or transmitted by this client plugin.
+ *
+ * Last successful PRO state is kept for up to 7 days if PayBox is temporarily
+ * unreachable. A successful check is cached for 6 hours.
+ */
+if (!function_exists('ua_backdoor_guard_is_pro')) {
+    function ua_backdoor_guard_is_pro($force = false) {
+        $license_key = trim((string) get_option('uabg_freemius_license_key', ''));
+        if ($license_key === '') {
+            return false;
+        }
+
+        $cache = get_option('uabg_paybox_license_status', array());
+        if (!is_array($cache)) {
+            $cache = array();
+        }
+
+        $checked = isset($cache['checked']) ? (int) $cache['checked'] : 0;
+        $valid = !empty($cache['valid']);
+
+        if (!$force && $checked && (time() - $checked) < 6 * HOUR_IN_SECONDS) {
+            return $valid;
+        }
+
+        $response = wp_remote_post(
+            ua_backdoor_guard_paybox_license_url(),
+            array(
+                'timeout' => 12,
+                'redirection' => 2,
+                'headers' => array(
+                    'Accept' => 'application/json'
+                ),
+                'body' => array(
+                    'service' => UABG_PAYBOX_SERVICE,
+                    'license_key' => $license_key
+                )
+            )
+        );
+
+        if (is_wp_error($response)) {
+            return $valid && $checked && (time() - $checked) <= 7 * DAY_IN_SECONDS;
+        }
+
+        $http_code = (int) wp_remote_retrieve_response_code($response);
+        $data = json_decode(wp_remote_retrieve_body($response), true);
+
+        if ($http_code !== 200 || !is_array($data) || !array_key_exists('valid', $data)) {
+            return $valid && $checked && (time() - $checked) <= 7 * DAY_IN_SECONDS;
+        }
+
+        $new_status = array(
+            'valid' => !empty($data['valid']) && $data['valid'] === true,
+            'status' => isset($data['status']) ? sanitize_key($data['status']) : 'unknown',
+            'expires' => isset($data['expires']) ? absint($data['expires']) : 0,
+            'checked' => time()
+        );
+
+        update_option('uabg_paybox_license_status', $new_status, false);
+
+        return $new_status['valid'];
+    }
+}
+
+/** Save and immediately verify the customer's Freemius license key. */
+if (!function_exists('ua_backdoor_guard_save_license')) {
+    function ua_backdoor_guard_save_license() {
+        if (!current_user_can('manage_options')) {
+            wp_die('Access Denied');
+        }
+
+        check_admin_referer('uabg_save_license');
+
+        $license_key = isset($_POST['uabg_license_key'])
+            ? trim(sanitize_text_field(wp_unslash($_POST['uabg_license_key'])))
+            : '';
+
+        if ($license_key === '') {
+            set_transient('uabg_notice_' . get_current_user_id(), 'Введіть ліцензійний ключ Freemius.', 60);
+            wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
+            exit;
+        }
+
+        update_option('uabg_freemius_license_key', $license_key, false);
+        delete_option('uabg_paybox_license_status');
+
+        $is_valid = ua_backdoor_guard_is_pro(true);
+
+        set_transient(
+            'uabg_notice_' . get_current_user_id(),
+            $is_valid
+                ? 'Ліцензію Freemius підтверджено. Довічний PRO активовано!'
+                : 'Ліцензію не підтверджено. Перевірте ключ і налаштування UA PayBox.',
+            60
+        );
+
+        wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
+        exit;
     }
 }
 
@@ -140,7 +252,7 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.1.0';
+    const VERSION = '3.2.0';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
@@ -155,6 +267,7 @@ final class UA_Backdoor_Guard {
 
         add_action('plugins_loaded', array(__CLASS__, 'load_textdomain'));
         add_action('admin_menu', array(__CLASS__, 'admin_menu'));
+        add_action('admin_post_uabg_save_license', 'ua_backdoor_guard_save_license');
 
         add_action(
             'admin_post_uabg_scan_start',
@@ -204,7 +317,7 @@ final class UA_Backdoor_Guard {
                 'title' => 'UA Backdoor Guard',
                 'scan_btn' => 'Запустити сканування',
                 'scans_left' => 'Безкоштовних сканувань залишилося:',
-                'pro_btn' => 'Отримати PRO',
+                'pro_btn' => 'Придбати довічний PRO',
                 'pro_active' => 'PRO активовано',
                 'quarantine' => 'Карантин',
                 'settings' => 'Налаштування',
@@ -218,7 +331,7 @@ final class UA_Backdoor_Guard {
                 'title' => 'UA Backdoor Guard',
                 'scan_btn' => 'Start Scan',
                 'scans_left' => 'Free scans left:',
-                'pro_btn' => 'Get PRO',
+                'pro_btn' => 'Buy Lifetime PRO',
                 'pro_active' => 'PRO is Active',
                 'quarantine' => 'Quarantine',
                 'settings' => 'Settings',
@@ -597,6 +710,21 @@ final class UA_Backdoor_Guard {
                        style="background:#b32d2e;border-color:#b32d2e;">
                         <?php echo esc_html(self::t('pro_btn')); ?>
                     </a>
+
+                    <form method="post"
+                          action="<?php echo esc_url(admin_url('admin-post.php')); ?>"
+                          style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                        <input type="hidden" name="action" value="uabg_save_license">
+                        <?php wp_nonce_field('uabg_save_license'); ?>
+                        <input type="password"
+                               name="uabg_license_key"
+                               class="regular-text"
+                               autocomplete="off"
+                               placeholder="<?php echo esc_attr(get_option('uabg_freemius_license_key') ? 'Ліцензійний ключ збережено — введіть новий для заміни' : 'Вставте ліцензійний ключ Freemius'); ?>"
+                               aria-label="Freemius license key"
+                               required>
+                        <button type="submit" class="button button-secondary">Перевірити ліцензію</button>
+                    </form>
 
                 <?php endif; ?>
 
