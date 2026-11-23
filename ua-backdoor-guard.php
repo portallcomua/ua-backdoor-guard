@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.2.0
+ * Version: 3.2.1
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -252,12 +252,13 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.2.0';
+    const VERSION = '3.2.1';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
     const OPTION_SCAN_STATE = 'uabg_scan_state';
     const OPTION_FREE_SCANS = 'uabg_free_scans';
+    const FREE_SCAN_LIMIT = 5;
 
     const QUARANTINE_DIR_NAME = 'ua-bg-quarantine';
 
@@ -360,7 +361,7 @@ final class UA_Backdoor_Guard {
         }
 
         if (get_option(self::OPTION_FREE_SCANS) === false) {
-            update_option(self::OPTION_FREE_SCANS, 5);
+            update_option(self::OPTION_FREE_SCANS, self::FREE_SCAN_LIMIT);
         }
 
         self::quarantine_dir();
@@ -693,38 +694,84 @@ final class UA_Backdoor_Guard {
                 <?php if ($is_pro): ?>
 
                     <strong style="color:#067647;font-size:17px;">
-                        ✓ <?php echo esc_html(self::t('pro_active')); ?>
+                        ✓ <?php echo esc_html(self::t('pro_active')); ?> — довічний безлімітний доступ
                     </strong>
 
                 <?php else: ?>
 
-                    <span>
-                        <?php echo esc_html(self::t('scans_left')); ?>
-                        <strong><?php echo esc_html($free_scans); ?></strong>
-                    </span>
+                    <div style="width:100%;">
+                        <div class="notice notice-info inline" style="margin:0 0 12px;padding:1px 12px;">
+                            <p>
+                                <?php if (strpos(get_locale(), 'uk') === 0): ?>
+                                    Безкоштовна версія дозволяє виконати до 5 сканувань на цьому сайті.
+                                    Після вичерпання ліміту для подальшої роботи потрібен довічний PRO.
+                                <?php else: ?>
+                                    The free version includes up to 5 scans on this site.
+                                    Lifetime PRO is required after the free scans are used.
+                                <?php endif; ?>
+                            </p>
+                        </div>
 
-                    <a href="<?php echo esc_url(ua_backdoor_guard_checkout_url()); ?>"
-                       class="button button-primary"
-                       target="_blank"
-                       rel="noopener noreferrer"
-                       style="background:#b32d2e;border-color:#b32d2e;">
-                        <?php echo esc_html(self::t('pro_btn')); ?>
-                    </a>
+                        <p style="font-size:16px;margin:8px 0 14px;">
+                            <strong>
+                                <?php echo esc_html(self::t('scans_left')); ?>
+                                <?php echo esc_html(max(0, $free_scans)); ?> / <?php echo (int) self::FREE_SCAN_LIMIT; ?>
+                            </strong>
+                        </p>
 
-                    <form method="post"
-                          action="<?php echo esc_url(admin_url('admin-post.php')); ?>"
-                          style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                        <input type="hidden" name="action" value="uabg_save_license">
-                        <?php wp_nonce_field('uabg_save_license'); ?>
-                        <input type="password"
-                               name="uabg_license_key"
-                               class="regular-text"
-                               autocomplete="off"
-                               placeholder="<?php echo esc_attr(get_option('uabg_freemius_license_key') ? 'Ліцензійний ключ збережено — введіть новий для заміни' : 'Вставте ліцензійний ключ Freemius'); ?>"
-                               aria-label="Freemius license key"
-                               required>
-                        <button type="submit" class="button button-secondary">Перевірити ліцензію</button>
-                    </form>
+                        <?php if ($free_scans <= 0): ?>
+
+                            <p style="color:#b32d2e;font-weight:600;">
+                                <?php if (strpos(get_locale(), 'uk') === 0): ?>
+                                    Безкоштовні сканування закінчилися. Придбайте довічний PRO, щоб продовжити сканування без обмежень.
+                                <?php else: ?>
+                                    Your free scans have been used. Purchase Lifetime PRO to continue scanning without limits.
+                                <?php endif; ?>
+                            </p>
+
+                            <a href="<?php echo esc_url(ua_backdoor_guard_checkout_url()); ?>"
+                               class="button button-primary"
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               style="background:#b32d2e;border-color:#b32d2e;margin:0 0 14px;">
+                                <?php echo esc_html(self::t('pro_btn')); ?>
+                            </a>
+
+                        <?php endif; ?>
+
+                        <hr style="margin:14px 0;">
+
+                        <p>
+                            <?php if (strpos(get_locale(), 'uk') === 0): ?>
+                                Уже оплатили? Freemius надішле ліцензійний ключ на вашу електронну пошту.
+                                Вставте його нижче, щоб активувати довічний PRO.
+                            <?php else: ?>
+                                Already purchased? Freemius will email your license key.
+                                Paste it below to activate Lifetime PRO.
+                            <?php endif; ?>
+                        </p>
+
+                        <form method="post"
+                              action="<?php echo esc_url(admin_url('admin-post.php')); ?>"
+                              style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                            <input type="hidden" name="action" value="uabg_save_license">
+                            <?php wp_nonce_field('uabg_save_license'); ?>
+                            <input type="password"
+                                   name="uabg_license_key"
+                                   class="regular-text"
+                                   autocomplete="off"
+                                   placeholder="<?php echo esc_attr(get_option('uabg_freemius_license_key') ? 'Введіть ключ Freemius для повторної перевірки або заміни' : 'Вставте ліцензійний ключ Freemius'); ?>"
+                                   aria-label="Freemius license key"
+                                   required>
+                            <button type="submit" class="button button-secondary">
+                                <?php if (strpos(get_locale(), 'uk') === 0): ?>
+                                    Активувати PRO
+                                <?php else: ?>
+                                    Activate PRO
+                                <?php endif; ?>
+                            </button>
+                        </form>
+                    </div>
 
                 <?php endif; ?>
 
@@ -1113,6 +1160,12 @@ final class UA_Backdoor_Guard {
         }
 
         check_admin_referer('uabg_scan_start');
+
+        $current_scan_state = get_option(self::OPTION_SCAN_STATE, array());
+        if (!empty($current_scan_state['running'])) {
+            wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
+            exit;
+        }
 
         $is_pro = ua_backdoor_guard_is_pro();
 
