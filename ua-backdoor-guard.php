@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.2.2
+ * Version: 3.2.3
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -186,7 +186,7 @@ function uabg_check_github_update($transient) {
         return $transient;
     }
 
-    $release = get_transient('uabg_github_release_322');
+    $release = get_transient('uabg_github_release_323');
 
     if (false === $release) {
 
@@ -268,7 +268,7 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.2.2';
+    const VERSION = '3.2.3';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
@@ -770,20 +770,20 @@ final class UA_Backdoor_Guard {
                             </p>
 
                             <?php $checkout_url = ua_backdoor_guard_checkout_url(); ?>
-                            <?php if ($checkout_url): ?>
+                            <?php if ($checkout_url && $pro_price): ?>
                                 <a href="<?php echo esc_url($checkout_url); ?>"
                                    class="button button-primary"
                                    target="_blank"
                                    rel="noopener noreferrer"
                                    style="background:#135e96;border-color:#135e96;min-height:38px;line-height:36px;padding:0 18px;">
                                     <?php echo strpos(get_locale(), 'uk') === 0 ? 'Придбати довічний PRO' : 'Buy Lifetime PRO'; ?>
-                                    <?php echo $pro_price ? ' — ' . esc_html($pro_price) : ''; ?>
+                                    — <?php echo esc_html($pro_price); ?>
                                 </a>
                             <?php else: ?>
                                 <p style="color:#b32d2e;font-weight:600;">
                                     <?php echo strpos(get_locale(), 'uk') === 0
-                                        ? 'Посилання на оплату поки недоступне. Перевірте налаштування послуги UA Backdoor Guard у UA Pay Box.'
-                                        : 'Checkout is unavailable. Check the UA Backdoor Guard service settings in UA Pay Box.'; ?>
+                                        ? 'Оплата тимчасово недоступна: UA Pay Box ще не повернув ціну та/або посилання Freemius. Перевірте налаштування послуги UA Backdoor Guard у UA Pay Box.'
+                                        : 'Checkout is temporarily unavailable because UA Pay Box has not returned the Freemius price and/or checkout URL. Check the UA Backdoor Guard service settings in UA Pay Box.'; ?>
                                 </p>
                             <?php endif; ?>
 
