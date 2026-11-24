@@ -3,7 +3,7 @@
  * Plugin Name: UA Backdoor Guard
  * Plugin URI: https://uaserver.pp.ua/ua-backdoor-guard/
  * Description: Сканер та активний захист сайту від бекдорів, шелів та зламів.
- * Version: 3.2.3
+ * Version: 3.2.4
  * Author: UAServer
  * Author URI: https://uaserver.pp.ua
  * License: GPL-2.0-or-later
@@ -186,7 +186,7 @@ function uabg_check_github_update($transient) {
         return $transient;
     }
 
-    $release = get_transient('uabg_github_release_323');
+    $release = get_transient('uabg_github_release_324');
 
     if (false === $release) {
 
@@ -246,7 +246,7 @@ function uabg_check_github_update($transient) {
     }
 
     // Cache only after the correctly named installable ZIP is available.
-    set_transient('uabg_github_release_322', $release, 6 * HOUR_IN_SECONDS);
+    set_transient('uabg_github_release_324', $release, 6 * HOUR_IN_SECONDS);
 
     $obj = new stdClass();
 
@@ -268,7 +268,7 @@ function uabg_check_github_update($transient) {
 
 final class UA_Backdoor_Guard {
 
-    const VERSION = '3.2.3';
+    const VERSION = '3.2.4';
 
     const OPTION_REPORT = 'uabg_last_report';
     const OPTION_SETTINGS = 'uabg_settings';
