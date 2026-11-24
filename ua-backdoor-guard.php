@@ -48,7 +48,18 @@ if (!function_exists('ua_backdoor_guard_paybox_service')) {
 if (!function_exists('ua_backdoor_guard_checkout_url')) {
     function ua_backdoor_guard_checkout_url() {
         $service = ua_backdoor_guard_paybox_service();
-        return !empty($service['checkout_url']) ? esc_url($service['checkout_url']) : (!empty($service['url']) ? esc_url($service['url']) : '');
+        $url = !empty($service['checkout_url']) ? $service['checkout_url'] : (!empty($service['url']) ? $service['url'] : '');
+        if (!$url) {
+            return '';
+        }
+
+        // Keep the Freemius purchase tied to the WordPress administrator email.
+        // Freemius supports user_email and readonly_user on Hosted Checkout URLs.
+        return esc_url(add_query_arg(array(
+            'user_email' => sanitize_email(get_option('admin_email')),
+            'readonly_user' => 'true',
+            'cancel_url' => admin_url('admin.php?page=ua-backdoor-guard')
+        ), $url));
     }
 }
 
@@ -59,7 +70,7 @@ if (!function_exists('ua_backdoor_guard_pro_price')) {
     }
 }
 
-/** Central UA PayBox license endpoint. */
+/** Central UA PayBox email-based PRO status endpoint. */
 if (!function_exists('ua_backdoor_guard_paybox_license_url')) {
     function ua_backdoor_guard_paybox_license_url() {
         return 'https://uaserver.pp.ua/wp-json/upb/v1/license/status';
@@ -67,21 +78,18 @@ if (!function_exists('ua_backdoor_guard_paybox_license_url')) {
 }
 
 /**
- * Validate the Freemius license through UA PayBox.
- * The customer license key is sent over HTTPS; Product Secret Key is never
- * stored or transmitted by this client plugin.
- *
- * Last successful PRO state is kept for up to 7 days if PayBox is temporarily
- * unreachable. A successful check is cached for 6 hours.
+ * Check the Freemius purchase by the WordPress administrator email.
+ * The buyer email is prefilled and locked in Hosted Checkout, so no license
+ * key is requested or stored on the customer's website.
  */
 if (!function_exists('ua_backdoor_guard_is_pro')) {
     function ua_backdoor_guard_is_pro($force = false) {
-        $license_key = trim((string) get_option('uabg_freemius_license_key', ''));
-        if ($license_key === '') {
+        $email = sanitize_email(get_option('admin_email'));
+        if (!$email || !is_email($email)) {
             return false;
         }
 
-        $cache = get_option('uabg_paybox_license_status', array());
+        $cache = get_option('uabg_paybox_email_status', array());
         if (!is_array($cache)) {
             $cache = array();
         }
@@ -89,7 +97,7 @@ if (!function_exists('ua_backdoor_guard_is_pro')) {
         $checked = isset($cache['checked']) ? (int) $cache['checked'] : 0;
         $valid = !empty($cache['valid']);
 
-        if (!$force && $checked && (time() - $checked) < 6 * HOUR_IN_SECONDS) {
+        if (!$force && $checked && (time() - $checked) < 5 * MINUTE_IN_SECONDS) {
             return $valid;
         }
 
@@ -98,12 +106,10 @@ if (!function_exists('ua_backdoor_guard_is_pro')) {
             array(
                 'timeout' => 12,
                 'redirection' => 2,
-                'headers' => array(
-                    'Accept' => 'application/json'
-                ),
+                'headers' => array('Accept' => 'application/json'),
                 'body' => array(
                     'service' => UABG_PAYBOX_SERVICE,
-                    'license_key' => $license_key
+                    'email' => $email
                 )
             )
         );
@@ -115,53 +121,39 @@ if (!function_exists('ua_backdoor_guard_is_pro')) {
         $http_code = (int) wp_remote_retrieve_response_code($response);
         $data = json_decode(wp_remote_retrieve_body($response), true);
 
-        if ($http_code !== 200 || !is_array($data) || !array_key_exists('valid', $data)) {
+        if (200 !== $http_code || !is_array($data) || !array_key_exists('valid', $data)) {
             return $valid && $checked && (time() - $checked) <= 7 * DAY_IN_SECONDS;
         }
 
         $new_status = array(
-            'valid' => !empty($data['valid']) && $data['valid'] === true,
+            'valid' => !empty($data['valid']) && true === $data['valid'],
             'status' => isset($data['status']) ? sanitize_key($data['status']) : 'unknown',
             'expires' => isset($data['expires']) ? absint($data['expires']) : 0,
             'checked' => time()
         );
 
-        update_option('uabg_paybox_license_status', $new_status, false);
-
+        update_option('uabg_paybox_email_status', $new_status, false);
         return $new_status['valid'];
     }
 }
 
-/** Save and immediately verify the customer's Freemius license key. */
-if (!function_exists('ua_backdoor_guard_save_license')) {
-    function ua_backdoor_guard_save_license() {
+/** Manually refresh payment status after returning from Freemius Checkout. */
+if (!function_exists('ua_backdoor_guard_check_payment')) {
+    function ua_backdoor_guard_check_payment() {
         if (!current_user_can('manage_options')) {
             wp_die('Access Denied');
         }
 
-        check_admin_referer('uabg_save_license');
-
-        $license_key = isset($_POST['uabg_license_key'])
-            ? trim(sanitize_text_field(wp_unslash($_POST['uabg_license_key'])))
-            : '';
-
-        if ($license_key === '') {
-            set_transient('uabg_notice_' . get_current_user_id(), 'Введіть ліцензійний ключ Freemius.', 60);
-            wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
-            exit;
-        }
-
-        update_option('uabg_freemius_license_key', $license_key, false);
-        delete_option('uabg_paybox_license_status');
-
+        check_admin_referer('uabg_check_payment');
+        delete_option('uabg_paybox_email_status');
         $is_valid = ua_backdoor_guard_is_pro(true);
 
         set_transient(
             'uabg_notice_' . get_current_user_id(),
             $is_valid
-                ? 'Ліцензію Freemius підтверджено. Довічний PRO активовано!'
-                : 'Ліцензію не підтверджено. Перевірте ключ і налаштування UA PayBox.',
-            60
+                ? 'Оплату підтверджено! Довічний безлімітний PRO активовано.'
+                : 'Поки що не знайдено підтвердженої оплати. Якщо ви щойно оплатили, зачекайте 1–2 хвилини та перевірте ще раз.',
+            90
         );
 
         wp_safe_redirect(admin_url('admin.php?page=ua-backdoor-guard'));
@@ -292,7 +284,9 @@ final class UA_Backdoor_Guard {
 
         add_action('plugins_loaded', array(__CLASS__, 'load_textdomain'));
         add_action('admin_menu', array(__CLASS__, 'admin_menu'));
-        add_action('admin_post_uabg_save_license', 'ua_backdoor_guard_save_license');
+        delete_option('uabg_freemius_license_key');
+        delete_option('uabg_paybox_license_status');
+        add_action('admin_post_uabg_check_payment', 'ua_backdoor_guard_check_payment');
 
         add_action(
             'admin_post_uabg_scan_start',
@@ -718,9 +712,12 @@ final class UA_Backdoor_Guard {
 
                 <?php if ($is_pro): ?>
 
-                    <strong style="color:#067647;font-size:17px;">
-                        ✓ <?php echo esc_html(self::t('pro_active')); ?> — <?php echo strpos(get_locale(), 'uk') === 0 ? 'довічний безлімітний доступ' : 'Lifetime unlimited access'; ?>
-                    </strong>
+                    <div style="width:100%;">
+                        <strong style="color:#067647;font-size:17px;">
+                            ✓ <?php echo esc_html(self::t('pro_active')); ?> — <?php echo strpos(get_locale(), 'uk') === 0 ? 'довічний безлімітний доступ' : 'Lifetime unlimited access'; ?>
+                        </strong>
+                        <p><?php echo strpos(get_locale(), 'uk') === 0 ? 'Оплату підтверджено через Freemius. Обмеження на кількість сканувань знято.' : 'Payment confirmed through Freemius. Scan limits are removed.'; ?></p>
+                    </div>
 
                 <?php else: ?>
 
@@ -728,11 +725,9 @@ final class UA_Backdoor_Guard {
                         <div class="notice notice-info inline" style="margin:0 0 12px;padding:1px 12px;">
                             <p>
                                 <?php if (strpos(get_locale(), 'uk') === 0): ?>
-                                    Безкоштовна версія дозволяє виконати до 5 сканувань на цьому сайті.
-                                    Після вичерпання ліміту для подальшої роботи потрібен довічний PRO.
+                                    <strong>Безкоштовно:</strong> 5 повних сканувань на цьому сайті. Після їх використання для наступних сканувань потрібен PRO.
                                 <?php else: ?>
-                                    The free version includes up to 5 scans on this site.
-                                    Lifetime PRO is required after the free scans are used.
+                                    <strong>Free:</strong> 5 full scans on this website. PRO is required for further scans after the free allowance is used.
                                 <?php endif; ?>
                             </p>
                         </div>
@@ -745,61 +740,64 @@ final class UA_Backdoor_Guard {
                         </p>
 
                         <?php if ($free_scans <= 0): ?>
-
                             <p style="color:#b32d2e;font-weight:600;">
-                                <?php if (strpos(get_locale(), 'uk') === 0): ?>
-                                    Безкоштовні сканування закінчилися. Придбайте довічний PRO, щоб продовжити сканування без обмежень.
-                                <?php else: ?>
-                                    Your free scans have been used. Purchase Lifetime PRO to continue scanning without limits.
-                                <?php endif; ?>
+                                <?php echo strpos(get_locale(), 'uk') === 0
+                                    ? 'Безкоштовні сканування закінчилися. Придбайте довічний PRO, щоб продовжити роботу.'
+                                    : 'Your free scans have been used. Purchase Lifetime PRO to continue.'; ?>
                             </p>
-
-                            <a href="<?php echo esc_url(ua_backdoor_guard_checkout_url()); ?>"
-                               class="button button-primary"
-                               target="_blank"
-                               rel="noopener noreferrer"
-                               style="background:#b32d2e;border-color:#b32d2e;margin:0 0 14px;">
-                                <?php echo esc_html(self::t('pro_btn')); ?><?php echo $pro_price ? ' — ' . esc_html($pro_price) : ''; ?>
-                            </a>
-
                         <?php endif; ?>
 
-                        <hr style="margin:14px 0;">
+                        <div style="border:1px solid #dcdcde;border-radius:6px;padding:14px;margin:12px 0;background:#f6f7f7;">
+                            <p style="font-size:17px;margin:0 0 8px;">
+                                <strong><?php echo strpos(get_locale(), 'uk') === 0 ? 'UA Backdoor Guard — довічний PRO' : 'UA Backdoor Guard — Lifetime PRO'; ?></strong>
+                            </p>
+                            <p style="font-size:22px;font-weight:700;margin:0 0 10px;color:#135e96;">
+                                <?php echo $pro_price ? esc_html($pro_price) : (strpos(get_locale(), 'uk') === 0 ? 'Ціна завантажується з UA Pay Box…' : 'Loading price from UA Pay Box…'); ?>
+                            </p>
+                            <ul style="list-style:disc;padding-left:22px;margin:8px 0;">
+                                <li><?php echo strpos(get_locale(), 'uk') === 0 ? 'Разова оплата — без щомісячних або щорічних списань.' : 'One-time payment — no monthly or yearly charges.'; ?></li>
+                                <li><?php echo strpos(get_locale(), 'uk') === 0 ? 'Довічний безлімітний доступ до сканувань на цьому сайті.' : 'Lifetime unlimited scans on this website.'; ?></li>
+                                <li><?php echo strpos(get_locale(), 'uk') === 0 ? 'Автоматична активація після підтвердження платежу Freemius через UA Pay Box.' : 'Automatic activation after Freemius payment confirmation through UA Pay Box.'; ?></li>
+                                <li><?php echo strpos(get_locale(), 'uk') === 0 ? 'Ліцензійний ключ вводити не потрібно.' : 'No license key entry is required.'; ?></li>
+                            </ul>
+                            <p style="font-size:12px;color:#646970;margin:8px 0 12px;">
+                                <?php
+                                echo strpos(get_locale(), 'uk') === 0
+                                    ? 'Оплата обробляється Freemius. Ціна в гривнях надходить з UA Pay Box та перераховується за актуальним курсом НБУ. Для автоматичного підтвердження використовується email адміністратора WordPress: '
+                                    : 'Payments are processed by Freemius. The UAH price is supplied by UA Pay Box and converted using the current NBU rate. WordPress administrator email used for purchase verification: ';
+                                ?>
+                                <strong><?php echo esc_html(get_option('admin_email')); ?></strong>
+                            </p>
 
-                        <p>
-                            <?php if (strpos(get_locale(), 'uk') === 0): ?>
-                                Уже оплатили? Freemius надішле ліцензійний ключ на вашу електронну пошту.
-                                Вставте його нижче, щоб активувати довічний PRO.
+                            <?php $checkout_url = ua_backdoor_guard_checkout_url(); ?>
+                            <?php if ($checkout_url): ?>
+                                <a href="<?php echo esc_url($checkout_url); ?>"
+                                   class="button button-primary"
+                                   target="_blank"
+                                   rel="noopener noreferrer"
+                                   style="background:#135e96;border-color:#135e96;min-height:38px;line-height:36px;padding:0 18px;">
+                                    <?php echo strpos(get_locale(), 'uk') === 0 ? 'Придбати довічний PRO' : 'Buy Lifetime PRO'; ?>
+                                    <?php echo $pro_price ? ' — ' . esc_html($pro_price) : ''; ?>
+                                </a>
                             <?php else: ?>
-                                Already purchased? Freemius will email your license key.
-                                Paste it below to activate Lifetime PRO.
+                                <p style="color:#b32d2e;font-weight:600;">
+                                    <?php echo strpos(get_locale(), 'uk') === 0
+                                        ? 'Посилання на оплату поки недоступне. Перевірте налаштування послуги UA Backdoor Guard у UA Pay Box.'
+                                        : 'Checkout is unavailable. Check the UA Backdoor Guard service settings in UA Pay Box.'; ?>
+                                </p>
                             <?php endif; ?>
-                        </p>
 
-                        <form method="post"
-                              action="<?php echo esc_url(admin_url('admin-post.php')); ?>"
-                              style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                            <input type="hidden" name="action" value="uabg_save_license">
-                            <?php wp_nonce_field('uabg_save_license'); ?>
-                            <input type="password"
-                                   name="uabg_license_key"
-                                   class="regular-text"
-                                   autocomplete="off"
-                                   placeholder="<?php echo esc_attr(get_option('uabg_freemius_license_key') ? 'Введіть ключ Freemius для повторної перевірки або заміни' : 'Вставте ліцензійний ключ Freemius'); ?>"
-                                   aria-label="Freemius license key"
-                                   required>
-                            <button type="submit" class="button button-secondary">
-                                <?php if (strpos(get_locale(), 'uk') === 0): ?>
-                                    Активувати PRO
-                                <?php else: ?>
-                                    Activate PRO
-                                <?php endif; ?>
-                            </button>
-                        </form>
+                            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top:12px;">
+                                <input type="hidden" name="action" value="uabg_check_payment">
+                                <?php wp_nonce_field('uabg_check_payment'); ?>
+                                <button type="submit" class="button button-secondary">
+                                    <?php echo strpos(get_locale(), 'uk') === 0 ? 'Я вже оплатив — перевірити та активувати PRO' : 'I have paid — check and activate PRO'; ?>
+                                </button>
+                            </form>
+                        </div>
                     </div>
 
                 <?php endif; ?>
-
             </div>
 
             <div class="uabg-panel">
